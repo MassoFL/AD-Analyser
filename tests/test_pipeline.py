@@ -98,6 +98,13 @@ class PipelineTest(unittest.TestCase):
         with patch('server.ask_mistral',side_effect=manual_during_request):self.app.run_job([row],self.app.config())
         self.assertEqual(self.rows()[0]['stage'],'rejected')
         self.assertIsNone(self.rows()[0]['analysis'])
+    def test_recent_decisions_appear_first_in_destination(self):
+        self.insert('Ancienne annonce'); self.insert('Annonce récente')
+        old,new=self.rows()
+        self.app.update(new['id'],{'revision':0,'stage':'kept'})
+        self.app.update(old['id'],{'revision':0,'stage':'kept'})
+        self.assertEqual(self.app.board({})['columns']['kept'][0]['id'],old['id'])
+
     def test_board_never_exposes_api_key(self):
         self.assertNotIn('fake-test-key',json.dumps(self.app.board({})))
 

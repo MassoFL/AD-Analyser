@@ -282,7 +282,8 @@ class App:
             columns = {}
             for stage in STAGES:
                 offset = max(0,int(query.get('offset_'+stage,['0'])[0]))
-                suffix = (' AND ' if clauses else ' WHERE ') + 'stage=? ORDER BY created DESC,id DESC LIMIT ? OFFSET ?'
+                order = 'created' if stage=='inbox' else 'updated'
+                suffix = (' AND ' if clauses else ' WHERE ') + 'stage=? ORDER BY '+order+' DESC,id DESC LIMIT ? OFFSET ?'
                 columns[stage] = [self.serialize(r) for r in db.execute('SELECT * FROM ads'+where+suffix,(*params,stage,limit,offset))]
         return {'columns':columns,'counts':matched,'totals':totals,'job':dict(self.job),'import':dict(self.import_info),
                 'settings':{'has_key':bool(self.config().get('MISTRAL_API_KEY')),'model':self.config().get('MISTRAL_MODEL','mistral-small-latest'),

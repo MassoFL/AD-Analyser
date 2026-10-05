@@ -2,3 +2,5 @@
 :root .card{flex-shrink:0}
 
 .cloud-pages{display:flex;align-items:center;justify-content:space-between;padding:10px 14px;font-size:12px;color:#64748b}.cloud-pages button{padding:4px 14px}
+
+.decision-actions{display:flex;gap:8px;margin-top:12px}.decision-actions button{flex:1;padding:9px 8px;font-weight:600}.decision-actions .keep{background:#e8f6ed;color:#17683a;border-color:#b5dfc4}.decision-actions .reject{background:#fff1f2;color:#a32e3c;border-color:#efc4cb}.decision-actions button:hover{filter:brightness(.96)}.saving{font-size:11px;color:#64748b}.card[aria-busy="true"]{opacity:.75;cursor:progress}
