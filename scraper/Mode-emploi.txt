@@ -1,0 +1,55 @@
+TRENDTRACK — TEXTE DES ANNONCES ET COUVERTURE
+
+PREMIÈRE CONNEXION OU SESSION EXPIRÉE
+Arrêter le scraper avec Ctrl+C et quitter son Chrome dédié s’il est ouvert.
+Double-cliquer sur Se-connecter.command : Chrome est lancé normalement,
+sans Playwright ni contrôle à distance. Se connecter à Trendtrack via Google.
+Une fois les annonces accessibles, quitter CE Chrome avec ⌘Q.
+Le scraper réutilisera ensuite le même profil dédié et sa session locale.
+Le lancement automatisé conserve désormais le trousseau macOS réel, comme
+Chrome normal. Les options de trousseau de test de Playwright sont retirées.
+Après cette correction, refaire une connexion avec Se-connecter.command si
+la session précédente est déjà perdue. Utiliser les deux commandes du MÊME
+dossier : chaque copie du dossier possède sa propre session.
+Cette étape ne garantit pas l’acceptation de la connexion par Google : si
+le blocage persiste dans Chrome normal, suivre l’aide Google indiquée.
+
+EXTRACTION
+Sur ce Mac : double-cliquer sur Lancer.command.
+La première exécution installe Playwright et RapidOCR dans un environnement propre au dossier.
+Chrome doit être installé. Python 3.9 à 3.12 doit être disponible.
+
+1. Vérifier que Trendtrack est déjà connecté dans la fenêtre du script.
+2. Régler les filtres sur la liste Google Ads.
+3. Revenir dans le terminal et appuyer sur Entrée.
+4. Retrouver annonces.csv dans exports/<date>/.
+
+Le CSV possède seulement deux colonnes : texte_annonce ; couverture.
+La couverture conserve la valeur affichée (10M, 1.5M-1.8M, etc.).
+Le texte est reconnu localement dans le visuel de l’annonce, pas dans le nom
+de l’annonceur. Il peut inclure le prix, une marque ou d’autres mentions
+présentes DANS le visuel. Le script ne reconstitue pas les phrases tronquées.
+Il ne transcrit pas l’audio des vidéos. Les erreurs OCR restent possibles.
+Un texte absent reste vide et est signalé dans rapport.json.
+
+La session est conservée dans .local/profil. Ne pas partager ce dossier.
+Chaque lancement crée un nouvel export. Ctrl+C conserve les lignes déjà écrites.
+Les mêmes visuels (URL identique) sont dédupliqués pendant une exécution.
+Une carte sans visuel reconnu ne peut pas être transcrite par cette version.
+La fin est détectée après environ 30 secondes sans nouveaux résultats en bas
+de liste. Un chargement interrompu peut donner un export incomplet : consulter
+rapport.json et comparer le nombre de lignes au nombre de résultats attendu.
+
+Test court depuis le dossier :
+    .venv/bin/python scrape.py --max 10
+
+Autre recherche :
+    .venv/bin/python scrape.py --url 'https://app.trendtrack.io/...'
+
+Le script fonctionne sans Codex et sans service OCR payant.
+Si Google refuse une connexion dans le scraper, utiliser Se-connecter.command.
+Ne pas effectuer la connexion Google dans le navigateur automatisé.
+Il a été adapté au DOM Trendtrack observé le 5 octobre 2026.
+OCR vérifié sur un visuel réel : Bracelet / PANDORA.. / [Prix] / CLEOR / ParYteo.
+Le parcours complet après connexion dans le navigateur dédié reste à vérifier
+lors de la première exécution. Les accents et espaces peuvent être mal reconnus.
