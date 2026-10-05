@@ -38,7 +38,7 @@ class Database:
             if not url.startswith(('postgresql://', 'postgres://')):
                 raise DatabaseError('SUPABASE_DB_URL doit être une URL PostgreSQL.')
             # Verify the server identity. Never silently fall back to local storage.
-            self.pool = ConnectionPool(url, min_size=0, max_size=4, open=True, timeout=20,
+            self.pool = ConnectionPool(url, min_size=0, max_size=1 if config.get('VERCEL') else 4, open=True, timeout=20,
                 kwargs={'row_factory': dict_row, 'connect_timeout': 10,
                         'sslmode': 'verify-full',
                         'sslrootcert': str((Path(__file__).resolve().parent / config['SUPABASE_SSLROOTCERT']).resolve()) if config.get('SUPABASE_SSLROOTCERT') else certifi.where(),

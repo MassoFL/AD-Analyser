@@ -1,0 +1,10 @@
+.env
+.env.*
+.venv
+.git
+data
+scraper
+supabase/certs
+tests
+__pycache__
+*.local.sql

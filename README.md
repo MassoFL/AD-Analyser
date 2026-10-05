@@ -108,3 +108,46 @@ Tests PostgreSQL optionnels : `RUN_SUPABASE_TESTS=1 .venv/bin/python -m unittest
 Ces derniers créent uniquement des tables temporaires isolées, annulées à la fin : ils ne changent aucune annonce réelle.
 
 Référence : [connexion PostgreSQL Supabase](https://supabase.com/docs/guides/database/connecting-to-postgres).
+
+## Déployer sur Vercel
+
+Importer ce dépôt avec **Framework Preset: Other**, **Root Directory: ./**.
+Le fichier `vercel.json` fournit la configuration ; ne pas ajouter de commande de build.
+Python 3.12 est défini dans `.python-version`. Activer Fluid Compute si le projet utilise
+encore les anciennes limites d’exécution. Une requête d’analyse dispose de 120 secondes.
+
+Dans **Settings → Environment Variables**, renseigner côté serveur :
+
+| Variable | Valeur |
+| --- | --- |
+| `SUPABASE_DB_URL` | L’URL privée du compte `ad_pipeline_app` ; utiliser le Transaction pooler, port **6543**, sur Vercel. |
+| `MISTRAL_API_KEY` | La clé Mistral. |
+| `MISTRAL_MODEL` | `mistral-small-latest` (facultatif). |
+| `PIPELINE_USER` | `admin` ou ton identifiant. |
+| `PIPELINE_PASSWORD` | Un mot de passe aléatoire d’au moins 24 caractères. |
+
+Ne pas définir de variable `NEXT_PUBLIC_*` pour ces secrets. Le certificat public
+Supabase est inclus dans `certs/`, donc **ne pas copier le chemin local
+`SUPABASE_SSLROOTCERT` dans Vercel**. Redéployer après une modification des variables.
+L’application refuse tout accès si le mot de passe est absent ou trop court.
+Le navigateur demande l’identifiant et le mot de passe à l’ouverture du site.
+
+Le scraper reste sur le Mac. Lancer `Synchroniser.command` en plus du scraper pour
+alimenter Supabase (ou garder l’interface locale ouverte : elle réalise déjà cet import).
+Vercel consulte directement la même base. La collecte s’arrête lorsque le Mac ou le
+collecteur est arrêté ; le site conserve l’accès aux données déjà importées.
+
+Sur le site, les lots Mistral sont une suite de requêtes, une annonce par requête :
+**garder l’onglet ouvert jusqu’à la fin**. Fermer l’onglet interrompt la suite du lot ;
+l’annonce en cours peut encore terminer. Les résultats aboutis restent dans Supabase.
+Un verrou PostgreSQL empêche d’analyser simultanément la même annonce depuis deux sites.
+Après un échec réseau, aucune nouvelle tentative facturée n’est lancée automatiquement.
+Les réglages Mistral sur Vercel se font dans les variables d’environnement, jamais dans `.env`.
+
+Les nouvelles annonces avec une URL de visuel Trendtrack affichent ce visuel directement
+sur le site. Les anciens exports sans URL restent sans image. Les fichiers locaux ne sont
+pas téléchargés dans Vercel ; les visuels restent tributaires de leur disponibilité chez
+Trendtrack. Le stockage permanent des images dans Supabase Storage n’est pas inclus ici.
+L’export CSV est téléchargé par pages pour respecter les limites de réponse Vercel.
+
+Documentation : [runtime Python Vercel](https://vercel.com/docs/functions/runtimes/python).

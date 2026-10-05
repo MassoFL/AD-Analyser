@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Pipeline local : Python 3.9+, Supabase/PostgreSQL ou SQLite."""
 import argparse
+import base64
+import hmac
 import csv
 from contextlib import nullcontext
 from database import Database, DatabaseError
@@ -43,12 +45,12 @@ def digest(value):
 def env_file():
     data = {}
     p = ROOT / '.env'
-    if p.exists():
+    if not os.environ.get('VERCEL') and p.exists():
         for line in p.read_text().splitlines():
             if '=' in line and not line.lstrip().startswith('#'):
                 k, v = line.split('=', 1)
                 data[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV', 'SUPABASE_DB_URL', 'SUPABASE_SSLROOTCERT'):
+    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV', 'SUPABASE_DB_URL', 'SUPABASE_SSLROOTCERT', 'PIPELINE_USER', 'PIPELINE_PASSWORD', 'VERCEL'):
         if k in os.environ:
             data[k] = os.environ[k]
     return data
@@ -94,7 +96,8 @@ class App:
     def __init__(self, data_dir=None, config=None):
         self.config_override = config
         self.data = Path(data_dir or ROOT / 'data')
-        self.data.mkdir(parents=True, exist_ok=True)
+        if not self.config().get('SUPABASE_DB_URL'):
+            self.data.mkdir(parents=True, exist_ok=True)
         self.db = self.data / 'pipeline.sqlite3'
         self.import_lock = threading.Lock()
         self.job_lock = threading.Lock()
@@ -278,8 +281,9 @@ class App:
                 matched.update({r['stage']:r['n'] for r in db.execute('SELECT stage,COUNT(*) AS n FROM ads'+where+' GROUP BY stage',params)})
             columns = {}
             for stage in STAGES:
-                suffix = (' AND ' if clauses else ' WHERE ') + 'stage=? ORDER BY created DESC,id DESC LIMIT ?'
-                columns[stage] = [self.serialize(r) for r in db.execute('SELECT * FROM ads'+where+suffix,(*params,stage,limit))]
+                offset = max(0,int(query.get('offset_'+stage,['0'])[0]))
+                suffix = (' AND ' if clauses else ' WHERE ') + 'stage=? ORDER BY created DESC,id DESC LIMIT ? OFFSET ?'
+                columns[stage] = [self.serialize(r) for r in db.execute('SELECT * FROM ads'+where+suffix,(*params,stage,limit,offset))]
         return {'columns':columns,'counts':matched,'totals':totals,'job':dict(self.job),'import':dict(self.import_info),
                 'settings':{'has_key':bool(self.config().get('MISTRAL_API_KEY')),'model':self.config().get('MISTRAL_MODEL','mistral-small-latest'),
                             'database':'Supabase' if self.storage.remote else 'SQLite'}}
@@ -328,11 +332,7 @@ class App:
                 try:
                     if not row['raw'].strip():
                         raise ValueError('Texte OCR vide : analyse impossible.')
-                    analysis = ask_mistral(row['raw'],config)
-                    with self.connect() as db:
-                        result = db.execute("UPDATE ads SET analysis=?,analyst=?,stage='review',error='',revision=revision+1,updated=? WHERE id=? AND revision=? AND stage='inbox'",
-                            (json.dumps(analysis,ensure_ascii=False),config.get('MISTRAL_MODEL','mistral-small-latest'),time.time(),row['id'],row['revision']))
-                    self.job['done'] += result.rowcount
+                    self.job['done'] += self.analyze_row(row,config)
                 except Exception as exc:
                     message = str(exc) if isinstance(exc,(ValueError,RuntimeError)) else 'Analyse interrompue. Réessaie ce lot.'
                     with self.connect() as db:
@@ -346,6 +346,24 @@ class App:
             self.job['error'] = str(exc)
         finally:
             self.job['running'] = False
+
+    def analyze_row(self, row, config):
+        # The transaction lock prevents local/cloud workers billing the same ad twice.
+        with self.connect() as db:
+            if self.storage.remote:
+                locked = db.execute("SELECT pg_try_advisory_xact_lock(hashtext(?)) AS locked", ('analyze:'+row['id'],)).fetchone()['locked']
+                if not locked:
+                    raise ValueError('Cette annonce est déjà en cours d’analyse.')
+                db.execute("SET LOCAL idle_in_transaction_session_timeout TO '110s'")
+            current = db.execute('SELECT * FROM ads WHERE id=?',(row['id'],)).fetchone()
+            if not current or current['stage']!='inbox' or current['analysis'] or current['revision']!=row['revision']:
+                return 0
+            if not current['raw'].strip():
+                raise ValueError('Texte OCR vide : analyse impossible.')
+            a = ask_mistral(current['raw'], config)
+            result = db.execute("UPDATE ads SET analysis=?,analyst=?,stage='review',error='',revision=revision+1,updated=? WHERE id=? AND revision=? AND stage='inbox'",
+                (json.dumps(a,ensure_ascii=False),config.get('MISTRAL_MODEL','mistral-small-latest'),time.time(),row['id'],row['revision']))
+            return result.rowcount
 
     def save_settings(self, body):
         key = body.get('key','').strip()
@@ -365,9 +383,12 @@ class App:
         with tmp.open('w') as f: f.write('\n'.join(lines)+'\n')
         tmp.chmod(0o600); tmp.replace(path)
 
-def serve(app, port=8765):
-    token = secrets.token_urlsafe(32)
+def make_handler(app, port=8765, cloud=False, config=None):
+    config = config or {}
+    password = config.get('PIPELINE_PASSWORD','')
+    token = hmac.new(password.encode(), b'ad-pipeline-csrf-v1', 'sha256').hexdigest() if cloud else secrets.token_urlsafe(32)
     class Handler(BaseHTTPRequestHandler):
+        application = app
         def log_message(self,*args): pass
         def send(self, data, status=200, content='application/json; charset=utf-8', extra=None):
             blob = json.dumps(data,ensure_ascii=False).encode() if content.startswith('application/json') else data
@@ -376,21 +397,42 @@ def serve(app, port=8765):
             self.send_header('Content-Length',str(len(blob)))
             self.send_header('Cache-Control','no-store')
             self.send_header('X-Content-Type-Options','nosniff')
-            self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data:; script-src 'self'; style-src 'self'; frame-ancestors 'none'")
+            self.send_header('Content-Security-Policy',"default-src 'self'; img-src 'self' data: https://medias.trendtrack.io; script-src 'self'; style-src 'self'; frame-ancestors 'none'")
             for k,v in (extra or {}).items(): self.send_header(k,v)
             self.end_headers(); self.wfile.write(blob)
         def allowed(self):
+            if cloud: return True
             return self.headers.get('Host') in (f'127.0.0.1:{port}',f'localhost:{port}')
+        def authenticated(self):
+            if not cloud:
+                return True
+            if len(password) < 24:
+                self.send({'error':'Configurer PIPELINE_PASSWORD (24 caractères minimum) dans Vercel.'},503)
+                return False
+            try:
+                scheme, encoded = self.headers.get('Authorization','').split(' ',1)
+                if scheme.lower()!='basic' or len(encoded)>4096: raise ValueError()
+                decoded = base64.b64decode(encoded,validate=True)
+                expected = (config.get('PIPELINE_USER','admin')+':'+password).encode()
+                if hmac.compare_digest(decoded,expected): return True
+            except (ValueError,TypeError):
+                pass
+            self.send({'error':'Connexion requise.'},401,extra={'WWW-Authenticate':'Basic realm="Ad Pipeline", charset="UTF-8"'})
+            return False
         def do_GET(self):
+            if not self.authenticated(): return
             if not self.allowed(): return self.send({'error':'Hôte refusé'},403)
             route = urlparse(self.path)
             try:
-                if route.path=='/api/board': return self.send(app.board(parse_qs(route.query)))
+                if cloud and route.path=='/api/export-page': return self.send(self.application.export_page(parse_qs(route.query)))
+                if cloud and route.path=='/api/export': return self.send({'error':'Utilise le bouton Exporter CSV.'},400)
+                if cloud and route.path.startswith('/images/'): return self.send({'error':'Image locale indisponible sur Vercel.'},404)
+                if route.path=='/api/board': return self.send(self.application.board(parse_qs(route.query)))
                 if route.path.startswith('/api/ad/'):
-                    with app.connect() as db: row=db.execute('SELECT * FROM ads WHERE id=?',(route.path.split('/')[-1],)).fetchone()
-                    return self.send(app.serialize(row)) if row else self.send({'error':'Introuvable'},404)
+                    with self.application.connect() as db: row=db.execute('SELECT * FROM ads WHERE id=?',(route.path.split('/')[-1],)).fetchone()
+                    return self.send(self.application.serialize(row)) if row else self.send({'error':'Introuvable'},404)
                 if route.path=='/api/export':
-                    with app.connect() as db: rows=db.execute('SELECT * FROM ads ORDER BY created,id').fetchall()
+                    with self.application.connect() as db: rows=db.execute('SELECT * FROM ads ORDER BY created,id').fetchall()
                     out=io.StringIO(); writer=csv.writer(out,delimiter=';')
                     writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire'])
                     for row in rows:
@@ -399,9 +441,9 @@ def serve(app, port=8765):
                         writer.writerow(["'"+v if str(v).lstrip().startswith(('=','+','-','@')) else v for v in vals])
                     return self.send(('\ufeff'+out.getvalue()).encode(),content='text/csv; charset=utf-8',extra={'Content-Disposition':'attachment; filename="pipeline.csv"'})
                 if route.path.startswith('/images/'):
-                    with app.connect() as db: row=db.execute('SELECT image_path FROM ads WHERE id=?',(route.path.split('/')[-1],)).fetchone()
+                    with self.application.connect() as db: row=db.execute('SELECT image_path FROM ads WHERE id=?',(route.path.split('/')[-1],)).fetchone()
                     path=Path(row['image_path']).resolve() if row and row['image_path'] else None
-                    if not path or app.export_root() not in path.parents or not path.is_file(): return self.send({'error':'Image absente'},404)
+                    if not path or self.application.export_root() not in path.parents or not path.is_file(): return self.send({'error':'Image absente'},404)
                     return self.send(path.read_bytes(),content='image/png')
                 static={'/':'index.html','/app.js':'app.js','/style.css':'style.css','/favicon.svg':'favicon.svg'}
                 if route.path in static:
@@ -414,22 +456,29 @@ def serve(app, port=8765):
             except Exception:
                 self.send({'error':'Impossible de charger les données.'},500)
         def do_POST(self):
+            if not self.authenticated(): return
             if not self.allowed() or self.headers.get('X-Pipeline-Token')!=token:
                 return self.send({'error':'Requête refusée. Recharge la page.'},403)
             try:
                 size=int(self.headers.get('Content-Length','0'))
-                if size>100000: raise ValueError('Requête trop volumineuse.')
+                if size<0 or size>100000: raise ValueError('Requête trop volumineuse.')
                 body=json.loads(self.rfile.read(size) or b'{}')
-                if self.path=='/api/settings': app.save_settings(body)
-                elif self.path=='/api/analyze': app.start_job(int(body.get('limit',10)))
-                elif self.path=='/api/stop': app.stop.set()
-                elif self.path=='/api/sync': app.import_all()
-                elif self.path.startswith('/api/ad/'): app.update(self.path.split('/')[-1],body)
+                if cloud and self.path=='/api/candidates': return self.send(self.application.candidates(body))
+                if cloud and self.path=='/api/analyze': return self.send(self.application.analyze_one(body))
+                if cloud and self.path=='/api/stop': return self.send({'ok':True})
+                if self.path=='/api/settings': self.application.save_settings(body)
+                elif self.path=='/api/analyze': self.application.start_job(int(body.get('limit',10)))
+                elif self.path=='/api/stop': self.application.stop.set()
+                elif self.path=='/api/sync': self.application.import_all()
+                elif self.path.startswith('/api/ad/'): self.application.update(self.path.split('/')[-1],body)
                 else: return self.send({'error':'Introuvable'},404)
                 self.send({'ok':True})
-            except (ValueError,KeyError,TypeError) as exc: self.send({'error':str(exc)},400)
+            except (ValueError,KeyError,TypeError,RuntimeError) as exc: self.send({'error':str(exc)},400)
             except Exception: self.send({'error':'Opération impossible. Réessaie.'},500)
-    server=ThreadingHTTPServer(('127.0.0.1',port),Handler)
+    return Handler
+
+def serve(app, port=8765):
+    server=ThreadingHTTPServer(('127.0.0.1',port),make_handler(app,port))
     def sync_loop():
         while True:
             app.import_all(); time.sleep(10)
