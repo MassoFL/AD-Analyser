@@ -15,7 +15,7 @@ document.querySelectorAll('.cards').forEach(el=>el.scrollTop=scrolls[el.dataset.
 $('#notice').hidden=board.settings.has_key&&!board.import.error;$('#notice').textContent=board.import.error||'Ajoute ta clé Mistral dans Réglages pour analyser les prochaines annonces. Les 100 premières analyses ont été reprises si elles étaient disponibles.';
 $('#analyze').disabled=board.job.running;$('#stop').hidden=!board.job.running;$('#batch').disabled=board.job.running;
 $('#job').hidden=!(board.job.running||board.job.total);$('#job').textContent=`${board.job.running?'Analyse en cours':'Dernier lot'} : ${board.job.done}/${board.job.total} analysées${board.job.failed?' · '+board.job.failed+' échec(s)':''}${board.job.error?' — '+board.job.error:''}`;
-$('#sync-text').textContent=board.import.last?'Synchronisé à '+new Date(board.import.last*1000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' · auto 10 s':'Import en cours…';
+$('#sync-text').textContent=(board.settings.database||'SQLite')+' · '+(board.import.last?'Synchronisé à '+new Date(board.import.last*1000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' · auto 10 s':'Import en cours…');
 }catch(e){toast(e.message);}finally{loading=false;}}
 function openSettings(){ $('#api-key').value='';$('#model').value=board?.settings.model||'mistral-small-latest';$('#key-status').textContent=board?.settings.has_key?'Une clé est enregistrée. Laisse le champ vide pour la conserver.':'Aucune clé enregistrée.';$('#settings').showModal();}
 $('#settings-open').onclick=openSettings;

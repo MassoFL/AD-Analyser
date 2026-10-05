@@ -1,7 +1,7 @@
 # Ad Pipeline
 
 MVP local pour suivre les annonces Google collectées dans Trendtrack.
-Python 3.9+ pour l’interface, sans dépendance externe. Chrome et les dépendances
+Python 3.9+ pour l’interface. PostgreSQL/Supabase via Psycopg, SQLite disponible en mode local. Chrome et les dépendances
 du dossier `scraper` sont nécessaires uniquement pour collecter de nouvelles annonces.
 
 ## Démarrer
@@ -9,7 +9,9 @@ du dossier `scraper` sont nécessaires uniquement pour collecter de nouvelles an
 Double-cliquer sur `Ouvrir.command` sur macOS, ou exécuter :
 
 ```sh
-python3 server.py
+python3 -m venv .venv
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python server.py
 ```
 
 Ouvrir http://127.0.0.1:8765. Le serveur écoute uniquement sur la machine locale.
@@ -36,7 +38,7 @@ reprend les annonces encore sans analyse. Les résultats déjà acquis sont cons
 
 ## Données et continuité
 
-- SQLite : `data/pipeline.sqlite3`.
+- Base active : Supabase lorsque `SUPABASE_DB_URL` est renseignée ; sinon SQLite dans `data/pipeline.sqlite3`. Aucun repli silencieux vers SQLite en cas de panne réseau.
 - Clé API : `.env`, permissions limitées au compte utilisateur. Jamais retournée au navigateur.
 - Import du dossier `SCRAPER_EXPORT_DIR` toutes les 10 secondes tant que le serveur est lancé.
 - Sur cette installation, `.env` pointe vers le scraper existant dans `../trendtrack/exports`. Pour utiliser la copie fournie dans ce projet, remettre `SCRAPER_EXPORT_DIR=scraper/exports`.
@@ -52,8 +54,7 @@ reprend les annonces encore sans analyse. Les résultats déjà acquis sont cons
 
 Si le scraper est déjà en cours lors d’une mise à jour du code, il utilise encore
 son ancienne version. Relancer la collecte pour conserver les images.
-Les données persistent après fermeture. Sauvegarder `data/` et les exports du scraper
-pour transférer l’application sur une autre machine.
+Les données persistent après fermeture. Les images restent locales : conserver les exports du scraper et leurs chemins pour les afficher sur une autre machine. Supabase contient leurs références, pas les fichiers. La connexion Supabase exige un accès Internet.
 
 ## GitHub
 
@@ -75,3 +76,35 @@ public, pas d’analyse d’image par Mistral. La liste charge progressivement 2
 par colonne. L’OCR et les classifications demandent une vérification humaine.
 Le scraping reste lancé manuellement avec sélection des filtres ; le pipeline importe
 automatiquement ses résultats, sans lancer ni planifier de navigateur en arrière-plan.
+
+## Configuration Supabase
+
+1. Dans le SQL Editor du projet, exécuter `supabase/migrations/001_pipeline.sql`.
+   Ce script idempotent crée le schéma privé `ad_pipeline`, les tables et le rôle
+   `ad_pipeline_app`. Les tables ne sont pas exposées par la Data API ; RLS est activé,
+   sans accès pour `anon` ou `authenticated`.
+2. Activer le rôle avec un mot de passe aléatoire fort, dans une requête non sauvegardée :
+   `ALTER ROLE ad_pipeline_app LOGIN PASSWORD 'REMPLACER_PAR_UN_SECRET';`
+   Le compte dispose uniquement des droits de lecture, insertion et mise à jour nécessaires.
+3. Dans **Connect → Direct → Session pooler**, relever l’hôte. Dans `.env`, définir :
+   `SUPABASE_DB_URL=postgresql://ad_pipeline_app.PROJECT_REF:MOT_DE_PASSE@HOTE:5432/postgres`
+   Encoder les caractères spéciaux du mot de passe dans l’URL. Ce secret reste exclusivement côté serveur.
+4. Télécharger le certificat officiel dans **Database → Settings → SSL configuration**,
+   le placer dans `supabase/certs/supabase-ca.crt`, puis définir
+   `SUPABASE_SSLROOTCERT=supabase/certs/supabase-ca.crt`. La connexion vérifie le certificat et le nom du serveur.
+5. Arrêter l’ancienne interface pour figer les modifications, puis reprendre ses données :
+   `.venv/bin/python migrate_supabase.py`
+   Une sauvegarde SQLite cohérente est créée dans `data/backups/` avant la copie.
+   La migration est transactionnelle et vérifie les lignes insérées. Une nouvelle exécution
+   conserve les lignes déjà présentes dans Supabase, y compris leurs corrections.
+6. Relancer `Ouvrir.command`. Les imports, analyses, statuts et exports utilisent alors Supabase.
+
+Les images et la clé Mistral restent locales. Le serveur reste monoposte et accessible
+uniquement depuis ce Mac ; Supabase ne constitue pas un déploiement public de l’interface.
+Ne jamais publier `.env`, les certificats propres à l’installation ou les sauvegardes.
+
+Tests locaux : `.venv/bin/python -m unittest discover -s tests -v`.
+Tests PostgreSQL optionnels : `RUN_SUPABASE_TESTS=1 .venv/bin/python -m unittest discover -s tests -v`.
+Ces derniers créent uniquement des tables temporaires isolées, annulées à la fin : ils ne changent aucune annonce réelle.
+
+Référence : [connexion PostgreSQL Supabase](https://supabase.com/docs/guides/database/connecting-to-postgres).

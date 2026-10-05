@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""Pipeline local : Python 3.9+, SQLite, interface sans dépendance."""
+"""Pipeline local : Python 3.9+, Supabase/PostgreSQL ou SQLite."""
 import argparse
 import csv
+from contextlib import nullcontext
+from database import Database, DatabaseError
 import hashlib
 import io
 import json
@@ -46,7 +48,7 @@ def env_file():
             if '=' in line and not line.lstrip().startswith('#'):
                 k, v = line.split('=', 1)
                 data[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV'):
+    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV', 'SUPABASE_DB_URL', 'SUPABASE_SSLROOTCERT'):
         if k in os.environ:
             data[k] = os.environ[k]
     return data
@@ -100,7 +102,9 @@ class App:
         self.stamps = {}
         self.import_info = {'last': None, 'added': 0, 'error': ''}
         self.job = {'running': False, 'total': 0, 'done': 0, 'failed': 0, 'error': ''}
-        with self.connect() as db:
+        self.storage = Database(self.db, self.config())
+        if not self.storage.remote:
+          with self.connect() as db:
             db.executescript('''PRAGMA journal_mode=WAL;
               CREATE TABLE IF NOT EXISTS ads (
                 id TEXT PRIMARY KEY, text_hash TEXT NOT NULL, raw TEXT NOT NULL, reach TEXT NOT NULL,
@@ -118,14 +122,12 @@ class App:
         return self.config_override if self.config_override is not None else env_file()
 
     def connect(self):
-        db = sqlite3.connect(self.db, timeout=30)
-        db.row_factory = sqlite3.Row
-        return db
+        return self.storage.connect()
 
     def export_root(self):
         return (ROOT / self.config().get('SCRAPER_EXPORT_DIR', 'scraper/exports')).resolve()
 
-    def ingest(self, row, source):
+    def ingest(self, row, source, connection=None, existing=None):
         raw = row.get('texte_annonce', '')
         if not isinstance(raw, str):
             return 0
@@ -139,23 +141,54 @@ class App:
             if self.export_root() in candidate.parents and candidate.is_file():
                 image_path = str(candidate)
         now = time.time()
-        with self.connect() as db:
-            old = db.execute('SELECT * FROM ads WHERE id=?', (ident,)).fetchone()
+        with (nullcontext(connection) if connection is not None else self.connect()) as db:
+            if self.storage.remote and connection is None:
+                db.execute("SELECT pg_advisory_xact_lock(hashtext('ad-pipeline-ingest'))")
+            old = existing['id'].get(ident) if existing is not None else db.execute('SELECT * FROM ads WHERE id=?', (ident,)).fetchone()
+            if not old and image_url:
+                old = existing['url'].get(image_url) if existing is not None else db.execute('SELECT * FROM ads WHERE image_url=?', (image_url,)).fetchone()
             if not old and image_url:
                 # Rattacher une nouvelle image à l'ancienne annonce sans perdre sa décision.
-                old = db.execute("SELECT * FROM ads WHERE text_hash=? AND image_url='' LIMIT 1", (fingerprint,)).fetchone()
+                old = existing['legacy'].get(fingerprint) if existing is not None else db.execute("SELECT * FROM ads WHERE text_hash=? AND image_url='' LIMIT 1", (fingerprint,)).fetchone()
             if old:
-                db.execute('UPDATE ads SET image_url=CASE WHEN ?!=\'\' THEN ? ELSE image_url END, image_path=CASE WHEN ?!=\'\' THEN ? ELSE image_path END, reach=?, updated=? WHERE id=?',
-                           (image_url,image_url,image_path,image_path,row.get('couverture',''),now,old['id']))
-                # L'identifiant reste stable pour les cartes déjà ouvertes.
-                return 0
-            if image_url:
-                old = db.execute('SELECT id FROM ads WHERE image_url=?', (image_url,)).fetchone()
-                if old:
-                    return 0
-            db.execute('INSERT INTO ads(id,text_hash,raw,reach,image_url,image_path,source,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',
-                       (ident,fingerprint,raw,row.get('couverture',''),image_url,image_path,source,now,now))
-            return 1
+                values = (image_url or old['image_url'], image_path or old['image_path'], row.get('couverture',''))
+                if values != (old['image_url'], old['image_path'], old['reach']):
+                    db.execute('UPDATE ads SET image_url=?,image_path=?,reach=?,updated=? WHERE id=?', (*values,now,old['id']))
+                    old = dict(old, image_url=values[0], image_path=values[1], reach=values[2])
+                added = 0
+            else:
+                db.execute('INSERT INTO ads(id,text_hash,raw,reach,image_url,image_path,source,created,updated) VALUES(?,?,?,?,?,?,?,?,?)',
+                           (ident,fingerprint,raw,row.get('couverture',''),image_url,image_path,source,now,now))
+                old = {'id':ident,'text_hash':fingerprint,'image_url':image_url,'image_path':image_path,'reach':row.get('couverture','')}
+                added = 1
+            if existing is not None:
+                existing['id'][old['id']] = old
+                if old['image_url']:
+                    existing['url'][old['image_url']] = old
+                    previous = existing['legacy'].get(fingerprint)
+                    if previous and previous['id'] == old['id']:
+                        existing['legacy'].pop(fingerprint, None)
+                else:
+                    existing['legacy'][fingerprint] = old
+            return added
+
+    def ingest_many(self, rows, source):
+        added = 0
+        # A cached lookup avoids two network round-trips per unchanged ad.
+        # One writer per import transaction also protects creative deduplication.
+        with self.connect() as db:
+            if self.storage.remote:
+                db.execute("SELECT pg_advisory_xact_lock(hashtext('ad-pipeline-ingest'))")
+            old = [dict(r) for r in db.execute('SELECT id,text_hash,image_url,image_path,reach FROM ads')]
+            existing = {'id':{r['id']:r for r in old},
+                        'url':{r['image_url']:r for r in old if r['image_url']},
+                        'legacy':{r['text_hash']:r for r in old if not r['image_url']}}
+            for i, row in enumerate(rows):
+                if row.get('couverture') is None:
+                    continue
+                row['_index'] = i
+                added += self.ingest(row, source, db, existing)
+        return added
 
     def import_all(self):
         if not self.import_lock.acquire(False):
@@ -184,15 +217,11 @@ class App:
                     if not text.endswith('\n'):
                         continue
                     rows = list(csv.DictReader(io.StringIO(text), delimiter=';'))
-                for i,row in enumerate(rows):
-                    if row.get('couverture') is None:
-                        continue
-                    row['_index'] = i
-                    added += self.ingest(row,str(file))
+                added += self.ingest_many(rows,str(file))
                 self.stamps[str(file)] = stamp
             self.seed()
             self.import_info = {'last':time.time(), 'added':added, 'error':''}
-        except (OSError, ValueError, sqlite3.Error) as exc:
+        except (OSError, ValueError, sqlite3.Error, DatabaseError) as exc:
             self.import_info['error'] = 'Import incomplet : ' + str(exc)[:180]
         finally:
             self.import_lock.release()
@@ -217,7 +246,7 @@ class App:
                          'commentaire':row.get('commentaire',''),'potentiel_ecommerce':potential}
                     db.execute("UPDATE ads SET analysis=?, analyst='Codex · import',stage='review' WHERE text_hash=? AND analysis IS NULL AND revision=0",
                                (json.dumps(a,ensure_ascii=False),h))
-            db.execute('INSERT INTO imports VALUES(?)',(str(path),))
+            db.execute('INSERT INTO imports VALUES(?) ON CONFLICT DO NOTHING',(str(path),))
 
     @staticmethod
     def serialize(row):
@@ -232,18 +261,28 @@ class App:
         needle = query.get('q',[''])[0].strip().lower()
         potential = query.get('potential',[''])[0]
         limit = min(10000,max(25,int(query.get('limit',['25'])[0])))
-        with self.connect() as db:
-            raw = db.execute('SELECT * FROM ads ORDER BY created DESC, rowid DESC').fetchall()
-        rows = [self.serialize(r) for r in raw]
-        totals = {s:sum(r['stage']==s for r in rows) for s in STAGES}
+        clauses, params = [], []
         if needle:
-            rows = [r for r in rows if needle in (r['raw']+' '+json.dumps(r['analysis'] or {},ensure_ascii=False)).lower()]
+            clauses.append("LOWER(raw || ' ' || COALESCE(analysis,'')) LIKE ? ESCAPE '!'")
+            params.append('%'+needle.replace('!','!!').replace('%','!%').replace('_','!_')+'%')
         if potential:
-            rows = [r for r in rows if (r['analysis'] or {}).get('potentiel_ecommerce')==potential]
-        matched = {s:sum(r['stage']==s for r in rows) for s in STAGES}
-        return {'columns':{s:[r for r in rows if r['stage']==s][:limit] for s in STAGES},'counts':matched,
-                'totals':totals,'job':dict(self.job),'import':dict(self.import_info),
-                'settings':{'has_key':bool(self.config().get('MISTRAL_API_KEY')),'model':self.config().get('MISTRAL_MODEL','mistral-small-latest')}}
+            field = "analysis::jsonb->>'potentiel_ecommerce'" if self.storage.remote else "json_extract(analysis,'$.potentiel_ecommerce')"
+            clauses.append(field+'=?'); params.append(potential)
+        where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
+        with self.connect() as db:
+            totals = {s:0 for s in STAGES}
+            totals.update({r['stage']:r['n'] for r in db.execute('SELECT stage,COUNT(*) AS n FROM ads GROUP BY stage')})
+            matched = dict(totals)
+            if clauses:
+                matched = {s:0 for s in STAGES}
+                matched.update({r['stage']:r['n'] for r in db.execute('SELECT stage,COUNT(*) AS n FROM ads'+where+' GROUP BY stage',params)})
+            columns = {}
+            for stage in STAGES:
+                suffix = (' AND ' if clauses else ' WHERE ') + 'stage=? ORDER BY created DESC,id DESC LIMIT ?'
+                columns[stage] = [self.serialize(r) for r in db.execute('SELECT * FROM ads'+where+suffix,(*params,stage,limit))]
+        return {'columns':columns,'counts':matched,'totals':totals,'job':dict(self.job),'import':dict(self.import_info),
+                'settings':{'has_key':bool(self.config().get('MISTRAL_API_KEY')),'model':self.config().get('MISTRAL_MODEL','mistral-small-latest'),
+                            'database':'Supabase' if self.storage.remote else 'SQLite'}}
 
     def update(self, ident, body):
         with self.connect() as db:
@@ -257,8 +296,10 @@ class App:
                 raise ValueError('Statut invalide.')
             a = json.dumps(validate_analysis(body['analysis']),ensure_ascii=False) if 'analysis' in body else row['analysis']
             analyst = 'Correction manuelle' if 'analysis' in body else row['analyst']
-            db.execute('UPDATE ads SET stage=?,analysis=?,analyst=?,revision=revision+1,updated=? WHERE id=?',
-                       (stage,a,analyst,time.time(),ident))
+            result = db.execute('UPDATE ads SET stage=?,analysis=?,analyst=?,revision=revision+1,updated=? WHERE id=? AND revision=?',
+                       (stage,a,analyst,time.time(),ident,row['revision']))
+            if result.rowcount != 1:
+                raise ValueError('Cette annonce a changé. Ferme puis rouvre sa fiche.')
 
     def start_job(self, limit):
         if not self.config().get('MISTRAL_API_KEY'):
@@ -282,7 +323,7 @@ class App:
                 if self.stop.is_set(): break
                 with self.connect() as db:
                     current = db.execute('SELECT stage,revision FROM ads WHERE id=?',(row['id'],)).fetchone()
-                if current['stage']!='inbox' or current['revision']!=row['revision']:
+                if not current or current['stage']!='inbox' or current['revision']!=row['revision']:
                     continue
                 try:
                     if not row['raw'].strip():
@@ -295,12 +336,14 @@ class App:
                 except Exception as exc:
                     message = str(exc) if isinstance(exc,(ValueError,RuntimeError)) else 'Analyse interrompue. Réessaie ce lot.'
                     with self.connect() as db:
-                        db.execute('UPDATE ads SET error=? WHERE id=?',(message,row['id']))
+                        db.execute('UPDATE ads SET error=? WHERE id=? AND revision=?',(message,row['id'],row['revision']))
                     self.job['failed'] += 1
                     self.job['error'] = message
                     # Éviter de multiplier les appels facturés après une erreur réseau/API.
                     if isinstance(exc,RuntimeError): break
                 self.stop.wait(0.5)
+        except DatabaseError as exc:
+            self.job['error'] = str(exc)
         finally:
             self.job['running'] = False
 
@@ -398,8 +441,13 @@ if __name__=='__main__':
     os.umask(0o077)
     parser=argparse.ArgumentParser(); parser.add_argument('--port',type=int,default=int(env_file().get('PORT',8765)))
     parser.add_argument('--import-only',action='store_true'); args=parser.parse_args()
-    app=App(); app.import_all()
-    if args.import_only: print(json.dumps(app.import_info))
+    try:
+        app=App()
+    except DatabaseError as exc:
+        raise SystemExit(str(exc)) from None
+    if args.import_only:
+        app.import_all(); print(json.dumps(app.import_info)); app.storage.close()
     else:
         try: serve(app,args.port)
         except KeyboardInterrupt: print('\nPipeline arrêté.')
+        finally: app.storage.close()

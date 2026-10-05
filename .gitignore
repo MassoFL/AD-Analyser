@@ -10,3 +10,6 @@ scraper/exports/
 scraper/.venv/
 
 .pytest_cache/
+# Fichiers de connexion et certificats spécifiques à une installation.
+*.local.sql
+supabase/certs/
