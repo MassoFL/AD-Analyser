@@ -30,7 +30,7 @@ $('#board').innerHTML=Object.entries(stages).map(([key,label])=>`<section class=
 document.querySelectorAll('.cards').forEach(el=>el.scrollTop=scrolls[el.dataset.stage]||0);
 $('#notice').hidden=board.settings.has_key&&!board.import.error;$('#notice').textContent=board.import.error||(board.settings.cloud?'Ajoute MISTRAL_API_KEY dans les variables Vercel puis redéploie.':'Ajoute ta clé Mistral dans Réglages pour analyser les prochaines annonces. Les 100 premières analyses ont été reprises si elles étaient disponibles.');
 $('#analyze').disabled=board.job.running;$('#stop').hidden=!board.job.running;$('#batch').disabled=board.job.running;
-$('#job').hidden=!(board.job.running||board.job.total);$('#job').textContent=`${board.job.running?'Analyse en cours':'Dernier lot'} : ${board.job.done}/${board.job.total} analysées${board.job.failed?' · '+board.job.failed+' échec(s)':''}${board.job.error?' — '+board.job.error:''}`;
+$('#job').hidden=!(board.job.running||board.job.total);$('#job').textContent=`${board.job.running?'Analyse en cours':'Dernier lot'} : ${board.job.done}/${board.job.total} analysées${board.job.skipped?' · '+board.job.skipped+' ignorée(s)':''}${board.job.failed?' · '+board.job.failed+' échec(s)':''}${board.job.error?' — '+board.job.error:''}`;
 $('#sync-text').textContent=(board.settings.database||'SQLite')+' · '+(board.import.last?'Synchronisé à '+new Date(board.import.last*1000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' · auto 10 s':'Import en cours…');
 if(board.settings.cloud){$('.local').textContent='Espace privé';$('#sync-text').textContent='Supabase · collecte depuis ton Mac';}
 }
@@ -81,14 +81,14 @@ refresh();setInterval(()=>{if(!document.hidden&&!$('dialog[open]')&&!document.qu
 
 async function runCloudBatch(){
  if(cloudJob?.running)return;
- stopCloud=false;cloudJob={running:true,total:0,done:0,failed:0,error:''};
+ stopCloud=false;cloudJob={running:true,total:0,done:0,skipped:0,failed:0,error:''};
  try{
   const result=await api('/api/candidates',{limit:Number($('#batch').value)});
   cloudJob.total=result.rows.length;await refresh();
-  if(!result.rows.length)toast('Aucune annonce en attente.');
+  if(!result.rows.length)toast('Aucune annonce avec du texte OCR en attente. Les annonces sans texte restent disponibles.');
   for(const row of result.rows){
    if(stopCloud)break;
-   try{const result=await api('/api/analyze',row);cloudJob.done+=result.done;}
+   try{const result=await api('/api/analyze',row);cloudJob.done+=result.done;if(!result.done)cloudJob.skipped++;}
    catch(e){cloudJob.failed++;cloudJob.error=e.message;break;}
    await refresh();
   }

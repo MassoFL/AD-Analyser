@@ -306,6 +306,23 @@ class App:
             if result.rowcount != 1:
                 raise ValueError('Cette annonce a changé. Ferme puis rouvre sa fiche.')
 
+    def pending_ads(self, limit):
+        # Python strip also handles tabs, newlines and Unicode whitespace.
+        # Apply the limit after filtering so empty OCR cannot starve a batch.
+        rows = []
+        with self.connect() as db:
+            cursor = db.execute("SELECT id,revision,raw FROM ads WHERE stage='inbox' AND analysis IS NULL ORDER BY created,id")
+            while len(rows) < limit:
+                chunk = cursor.fetchmany(200)
+                if not chunk:
+                    break
+                for row in chunk:
+                    if row['raw'].strip():
+                        rows.append(dict(row))
+                        if len(rows) == limit:
+                            break
+        return rows
+
     def start_job(self, limit):
         if not self.config().get('MISTRAL_API_KEY'):
             raise ValueError('Ajoute ta clé Mistral dans les réglages.')
@@ -314,10 +331,9 @@ class App:
         with self.job_lock:
             if self.job['running']:
                 raise ValueError('Une analyse est déjà en cours.')
-            with self.connect() as db:
-                rows = [dict(r) for r in db.execute("SELECT * FROM ads WHERE stage='inbox' AND analysis IS NULL ORDER BY created,id LIMIT ?",(limit,))]
+            rows = self.pending_ads(limit)
             if not rows:
-                raise ValueError('Aucune annonce en attente d’analyse.')
+                raise ValueError('Aucune annonce avec du texte OCR en attente d’analyse.')
             self.stop.clear()
             self.job = {'running':True,'total':len(rows),'done':0,'failed':0,'error':''}
             threading.Thread(target=self.run_job,args=(rows,self.config().copy()),daemon=True).start()
@@ -331,9 +347,9 @@ class App:
                 if not current or current['stage']!='inbox' or current['revision']!=row['revision']:
                     continue
                 try:
-                    if not row['raw'].strip():
-                        raise ValueError('Texte OCR vide : analyse impossible.')
-                    self.job['done'] += self.analyze_row(row,config)
+                    done = self.analyze_row(row,config)
+                    self.job['done'] += done
+                    if not done: self.job['skipped'] = self.job.get('skipped',0)+1
                 except Exception as exc:
                     message = str(exc) if isinstance(exc,(ValueError,RuntimeError)) else 'Analyse interrompue. Réessaie ce lot.'
                     with self.connect() as db:
@@ -360,7 +376,7 @@ class App:
             if not current or current['stage']!='inbox' or current['analysis'] or current['revision']!=row['revision']:
                 return 0
             if not current['raw'].strip():
-                raise ValueError('Texte OCR vide : analyse impossible.')
+                return 0
             a = ask_mistral(current['raw'], config)
             result = db.execute("UPDATE ads SET analysis=?,analyst=?,stage='review',error='',revision=revision+1,updated=? WHERE id=? AND revision=? AND stage='inbox'",
                 (json.dumps(a,ensure_ascii=False),config.get('MISTRAL_MODEL','mistral-small-latest'),time.time(),row['id'],row['revision']))

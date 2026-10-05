@@ -42,9 +42,7 @@ class CloudApp(App):
     def candidates(self, body):
         limit = int(body.get('limit',1))
         if limit not in (1,10,25,100): raise ValueError('Taille de lot invalide.')
-        with self.connect() as db:
-            rows = db.execute("SELECT id,revision FROM ads WHERE stage='inbox' AND analysis IS NULL ORDER BY created,id LIMIT ?",(limit,)).fetchall()
-        return {'rows':[dict(r) for r in rows]}
+        return {'rows':[{'id':r['id'],'revision':r['revision']} for r in self.pending_ads(limit)]}
 
     def analyze_one(self, body):
         if not self.config().get('MISTRAL_API_KEY'): raise ValueError('Configure MISTRAL_API_KEY dans Vercel.')

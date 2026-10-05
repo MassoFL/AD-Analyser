@@ -82,3 +82,21 @@ class VercelTest(unittest.TestCase):
         self.assertEqual(len(first['csv'].splitlines()),101)
         self.assertEqual(len(second['csv'].splitlines()),5)
         self.assertIsNone(second['next'])
+
+    def test_blank_ocr_does_not_starve_candidates(self):
+        blanks=['', ' ', '\n\t', '\u00a0', '\u2003']*25
+        self.app.ingest_many([{'texte_annonce':text,'couverture':'1M'} for text in blanks]+[{'texte_annonce':'Lampe rechargeable','couverture':'1M'}], 'fixture')
+        rows=self.app.candidates({'limit':100})['rows']
+        self.assertEqual(len(rows),1)
+        with patch('server.ask_mistral',return_value=test_pipeline.analysis()) as call:
+            self.assertEqual(self.app.analyze_one(rows[0]),{'done':1})
+            self.assertEqual(call.call_count,1)
+
+    def test_direct_empty_ocr_is_skipped_without_mistral(self):
+        self.app.ingest({'texte_annonce':'\n\t','couverture':'1M'},'fixture')
+        with self.app.connect() as db:
+            row=db.execute('SELECT id,revision FROM ads').fetchone()
+        with patch('server.ask_mistral') as call:
+            self.assertEqual(self.app.analyze_one(dict(row)),{'done':0})
+            call.assert_not_called()
+        self.assertEqual(self.app.candidates({'limit':100})['rows'],[])
