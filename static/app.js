@@ -5,6 +5,7 @@ let board, selected, initialAnalysis, initialCompetitors, limit=25, timer, loadi
 const pendingMoves=new Map();
 let boardVersion=0, refreshAgain=false, moveRefreshTimer;
 let offsets={inbox:0,review:0,kept:0,rejected:0}, cloudJob=null, stopCloud=false;
+const focusStages=['review'];
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(timer);timer=setTimeout(()=>$('#toast').hidden=true,6500);}
 async function api(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Pipeline-Token':token},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'Opération impossible.');return result;}
@@ -23,7 +24,7 @@ async function refresh(){
  if(loading||pendingMoves.size){refreshAgain=true;return;}
  loading=true;refreshAgain=false;const version=boardVersion;
  try{
-  const query=new URLSearchParams({q:$('#search').value,potential:$('#potential').value,limit});
+  const query=new URLSearchParams({q:$('#search').value,potential:$('#potential').value,limit:1});
   for(const [stage,offset] of Object.entries(offsets))query.set('offset_'+stage,offset);
   const incoming=await api('/api/board?'+query);
   if(version!==boardVersion||pendingMoves.size){refreshAgain=true;return;}
@@ -34,7 +35,7 @@ async function refresh(){
 function renderBoard(){
 const total=Object.values(board.totals).reduce((a,b)=>a+b,0);$('#summary').textContent=`${total.toLocaleString('fr-FR')} annonces · ${board.totals.review} à examiner · ${board.totals.kept} retenues`;
 const scrolls={};document.querySelectorAll('.cards').forEach(el=>scrolls[el.dataset.stage]=el.scrollTop);
-$('#board').innerHTML=Object.entries(stages).map(([key,label])=>`<section class="column" data-stage="${key}" aria-label="${label}"><div class="column-head">${label}<span class="count">${board.counts[key]}</span></div><div class="cards" data-stage="${key}">${board.columns[key].map(card).join('')||`<div class="empty"><b>Aucune annonce</b>${esc(descriptions[key])}</div>`}</div>${board.settings.cloud?`<div class="cloud-pages"><button data-page="${key}" data-delta="-25" ${offsets[key]===0?'disabled':''}>←</button><span>${offsets[key]+board.columns[key].length}/${board.counts[key]}</span><button data-page="${key}" data-delta="25" ${offsets[key]+25>=board.counts[key]?'disabled':''}>→</button></div>`:(board.counts[key]>board.columns[key].length?`<button class="more" data-more="true">Voir davantage (${board.columns[key].length}/${board.counts[key]})</button>`:'')}</section>`).join('');
+$('#board').innerHTML=focusStages.map(key=>{const label=stages[key];return `<section class="column focus-column" data-stage="${key}" aria-label="${label}"><div class="column-head"><span>${label}</span><span class="count">${board.counts[key]}</span></div><div class="cards" data-stage="${key}">${board.columns[key].map(card).join('')||`<div class="empty"><b>Aucune annonce à examiner</b>${esc(descriptions[key])}</div>`}</div><div class="review-navigation"><button data-page="${key}" data-delta="-1" ${offsets[key]===0?'disabled':''}>← Précédente</button><span>${board.counts[key] ? offsets[key]+1 : 0} / ${board.counts[key]}</span><button data-page="${key}" data-delta="1" ${offsets[key]+1>=board.counts[key]?'disabled':''}>Suivante →</button></div></section>`;}).join('');
 document.querySelectorAll('.cards').forEach(el=>el.scrollTop=scrolls[el.dataset.stage]||0);
 $('#notice').hidden=board.settings.has_key&&!board.import.error;$('#notice').textContent=board.import.error||(board.settings.cloud?'Ajoute MISTRAL_API_KEY dans les variables Vercel puis redéploie.':'Ajoute ta clé Mistral dans Réglages pour analyser les prochaines annonces. Les 100 premières analyses ont été reprises si elles étaient disponibles.');
 $('#analyze').disabled=board.job.running;$('#stop').hidden=!board.job.running;$('#batch').disabled=board.job.running;
