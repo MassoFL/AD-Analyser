@@ -8,7 +8,7 @@ from database import Database, DatabaseError
 from server import ROOT, env_file
 
 COLUMNS = ('id','text_hash','raw','reach','image_url','image_path','source','stage',
-           'analysis','analyst','error','revision','created','updated')
+           'analysis','analyst','error','revision','created','updated','search_keywords')
 
 
 def migrate(source, config):
@@ -28,7 +28,9 @@ def migrate(source, config):
         backup.chmod(0o600)
         local = sqlite3.connect(backup)
         try:
-            rows = local.execute('SELECT '+','.join(COLUMNS)+' FROM ads ORDER BY created,id').fetchall()
+            available = {r[1] for r in local.execute('PRAGMA table_info(ads)')}
+            selection = ','.join(c if c in available else "'[]' AS search_keywords" for c in COLUMNS)
+            rows = local.execute('SELECT '+selection+' FROM ads ORDER BY created,id').fetchall()
             imports = local.execute('SELECT name FROM imports').fetchall()
         finally:
             local.close()

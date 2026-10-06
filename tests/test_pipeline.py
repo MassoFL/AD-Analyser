@@ -120,6 +120,26 @@ class PipelineTest(unittest.TestCase):
             self.assertEqual(len(board['columns']['rejected']),1)
             self.assertEqual(board['totals']['review'],2)
 
+    def test_keywords_persist_through_import_and_stage_changes(self):
+        self.insert(); row=self.rows()[0]
+        self.app.update(row['id'],{'revision':0,'stage':'kept','search_keywords':[' lampe  bureau ','Lampe bureau','éclairage LED']})
+        self.insert()
+        self.app.update(row['id'],{'revision':1,'stage':'review','analysis':analysis()})
+        result=self.app.serialize(self.rows()[0])
+        self.assertEqual(result['search_keywords'],['lampe bureau','éclairage LED'])
+        self.app.update(row['id'],{'revision':2,'search_keywords':[]})
+        self.assertEqual(self.app.serialize(self.rows()[0])['search_keywords'],[])
+
+    def test_keywords_limits_and_stale_update(self):
+        self.insert(); row=self.rows()[0]
+        for bad in [['a','b','c','d'],'abc',[None],['x'*101]]:
+            with self.assertRaises(ValueError):
+                self.app.update(row['id'],{'revision':0,'search_keywords':bad})
+        self.app.update(row['id'],{'revision':0,'search_keywords':['un','deux','trois']})
+        with self.assertRaises(ValueError):
+            self.app.update(row['id'],{'revision':0,'search_keywords':['écrasé']})
+        self.assertEqual(self.app.serialize(self.rows()[0])['search_keywords'],['un','deux','trois'])
+
     def test_board_never_exposes_api_key(self):
         self.assertNotIn('fake-test-key',json.dumps(self.app.board({})))
 

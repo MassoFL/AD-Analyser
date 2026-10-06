@@ -79,7 +79,7 @@ automatiquement ses résultats, sans lancer ni planifier de navigateur en arriè
 
 ## Configuration Supabase
 
-1. Dans le SQL Editor du projet, exécuter `supabase/migrations/001_pipeline.sql`.
+1. Dans le SQL Editor du projet, exécuter les fichiers de `supabase/migrations/` dans l’ordre (001, puis 002).
    Ce script idempotent crée le schéma privé `ad_pipeline`, les tables et le rôle
    `ad_pipeline_app`. Les tables ne sont pas exposées par la Data API ; RLS est activé,
    sans accès pour `anon` ou `authenticated`.
@@ -151,3 +151,16 @@ Trendtrack. Le stockage permanent des images dans Supabase Storage n’est pas i
 L’export CSV est téléchargé par pages pour respecter les limites de réponse Vercel.
 
 Documentation : [runtime Python Vercel](https://vercel.com/docs/functions/runtimes/python).
+
+## Mots-clés de recherche (préparation)
+
+Le champ `ads.search_keywords` conserve jusqu’à trois expressions (100 caractères chacune),
+indépendamment de l’analyse Mistral et du statut. Elles apparaissent sur les cartes retenues
+lorsqu’elles existent et dans les exports CSV. L’API de modification accepte
+`search_keywords: ["expression 1", "expression 2", "expression 3"]` avec la révision habituelle.
+Les imports et les changements d’étape ne les remplacent pas.
+
+Appliquer `supabase/migrations/002_search_keywords.sql` avant d’enregistrer des mots-clés.
+Sans cette migration, le pipeline existant continue de fonctionner avec des listes vides.
+Aucune saisie manuelle ni génération Mistral n’est activée : cette étape prépare seulement
+le stockage, la validation, l’API et l’affichage pour une future génération.

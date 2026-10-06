@@ -72,6 +72,20 @@ def validate_analysis(data):
     data['potentiel_ecommerce'] = 'oui' if data['consommable'] == 'non' and data['service'] == 'non' and data['niche_claire'] else 'non'
     return {k: data[k] for k in ('texte_nettoye','micro_niche','consommable','service','niche_claire','a_verifier','commentaire','potentiel_ecommerce')}
 
+def validate_keywords(value):
+    if not isinstance(value,list) or len(value)>3:
+        raise ValueError('Trois mots-clés maximum par annonce.')
+    result = []
+    for keyword in value:
+        if not isinstance(keyword,str):
+            raise ValueError('Chaque mot-clé doit être du texte.')
+        keyword = ' '.join(keyword.split())
+        if len(keyword)>100:
+            raise ValueError('Chaque mot-clé est limité à 100 caractères.')
+        if keyword and keyword.casefold() not in [k.casefold() for k in result]:
+            result.append(keyword)
+    return result
+
 def ask_mistral(text, config):
     payload = {'model': config.get('MISTRAL_MODEL', 'mistral-small-latest'), 'temperature': 0.1,
                'max_tokens': 1500, 'response_format': {'type': 'json_object'},
@@ -119,6 +133,8 @@ class App:
               CREATE UNIQUE INDEX IF NOT EXISTS idx_ads_image_url ON ads(image_url) WHERE image_url!='';
               CREATE TABLE IF NOT EXISTS imports (name TEXT PRIMARY KEY);
             ''')
+            if 'search_keywords' not in [r['name'] for r in db.execute('PRAGMA table_info(ads)')]:
+                db.execute("ALTER TABLE ads ADD COLUMN search_keywords TEXT NOT NULL DEFAULT '[]'")
 
     def config(self):
         return self.config_override if self.config_override is not None else env_file()
@@ -253,6 +269,7 @@ class App:
     @staticmethod
     def serialize(row):
         result = dict(row)
+        result['search_keywords'] = json.loads(result.get('search_keywords') or '[]')
         result['analysis'] = json.loads(result['analysis']) if result['analysis'] else None
         result['has_image'] = bool(result.pop('image_path'))
         result.pop('source',None)
@@ -300,8 +317,16 @@ class App:
                 raise ValueError('Statut invalide.')
             a = json.dumps(validate_analysis(body['analysis']),ensure_ascii=False) if 'analysis' in body else row['analysis']
             analyst = 'Correction manuelle' if 'analysis' in body else row['analyst']
-            result = db.execute('UPDATE ads SET stage=?,analysis=?,analyst=?,revision=revision+1,updated=? WHERE id=? AND revision=?',
-                       (stage,a,analyst,time.time(),ident,row['revision']))
+            keyword_sql = ''
+            values = [stage,a,analyst]
+            if 'search_keywords' in body:
+                keywords = validate_keywords(body['search_keywords'])
+                if 'search_keywords' not in row.keys():
+                    raise ValueError('Le stockage des mots-clés doit être activé dans Supabase (migration 002).')
+                keyword_sql = ',search_keywords=?'
+                values.append(json.dumps(keywords,ensure_ascii=False))
+            values.extend([time.time(),ident,row['revision']])
+            result = db.execute('UPDATE ads SET stage=?,analysis=?,analyst=?'+keyword_sql+',revision=revision+1,updated=? WHERE id=? AND revision=?',values)
             if result.rowcount != 1:
                 raise ValueError('Cette annonce a changé. Ferme puis rouvre sa fiche.')
 
@@ -433,10 +458,11 @@ def make_handler(app, port=8765, cloud=False, config=None):
                 if route.path=='/api/export':
                     with self.application.connect() as db: rows=db.execute('SELECT * FROM ads ORDER BY created,id').fetchall()
                     out=io.StringIO(); writer=csv.writer(out,delimiter=';')
-                    writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire'])
+                    writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire','mot_cle_1','mot_cle_2','mot_cle_3'])
                     for row in rows:
                         a=json.loads(row['analysis'] or '{}')
                         vals=[row['id'],row['raw'],row['reach'],a.get('texte_nettoye',''),a.get('micro_niche',''),a.get('consommable',''),a.get('service',''),a.get('potentiel_ecommerce',''),LABELS[row['stage']],a.get('commentaire','')]
+                        keywords=json.loads(dict(row).get('search_keywords') or '[]'); vals+=(keywords+['','',''])[:3]
                         writer.writerow(["'"+v if str(v).lstrip().startswith(('=','+','-','@')) else v for v in vals])
                     return self.send(('\ufeff'+out.getvalue()).encode(),content='text/csv; charset=utf-8',extra={'Content-Disposition':'attachment; filename="pipeline.csv"'})
                 if route.path.startswith('/images/'):
