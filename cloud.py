@@ -68,11 +68,12 @@ class CloudApp(App):
                               (after_time,after_time,after_id)).fetchall()
         out = io.StringIO(); writer = csv.writer(out,delimiter=';')
         if after_time == -1:
-            writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire','mot_cle_1','mot_cle_2','mot_cle_3'])
+            writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire','mot_cle_1','mot_cle_2','mot_cle_3','liens_concurrents'])
         for row in rows:
             a=json.loads(row['analysis'] or '{}')
             values=[row['id'],row['raw'],row['reach'],a.get('texte_nettoye',''),a.get('micro_niche',''),a.get('consommable',''),a.get('service',''),a.get('potentiel_ecommerce',''),LABELS[row['stage']],a.get('commentaire','')]
             keywords=json.loads(dict(row).get('search_keywords') or '[]'); values+=(keywords+['','',''])[:3]
+            values.append('\n'.join(json.loads(dict(row).get('competitor_links') or '[]')))
             writer.writerow(["'"+str(v) if str(v).lstrip().startswith(('=','+','-','@')) else v for v in values])
         cursor = {'after_time':rows[-1]['created'],'after_id':rows[-1]['id']} if len(rows)==100 else None
         return {'csv':out.getvalue(),'next':cursor}

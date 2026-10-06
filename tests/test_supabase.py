@@ -28,6 +28,7 @@ class SupabaseTest(test_pipeline.PipelineTest):
         self.conn.execute('SET search_path TO pg_temp, ad_pipeline, pg_catalog')
         self.conn.execute('CREATE TEMP TABLE ads (LIKE ad_pipeline.ads INCLUDING ALL)')
         self.conn.execute("ALTER TABLE pg_temp.ads ADD COLUMN IF NOT EXISTS search_keywords TEXT NOT NULL DEFAULT '[]'")
+        self.conn.execute("ALTER TABLE pg_temp.ads ADD COLUMN IF NOT EXISTS competitor_links TEXT NOT NULL DEFAULT '[]'")
         self.conn.execute('CREATE TEMP TABLE imports (LIKE ad_pipeline.imports INCLUDING ALL)')
         self.app.storage = TemporaryPostgres(self.conn)
 

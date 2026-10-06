@@ -6,7 +6,7 @@ const vm=require('node:vm');
 function fixture(){
  const elements=new Map(),requests=[];
  const element=s=>{if(!elements.has(s))elements.set(s,{content:'test-csrf',value:'',innerHTML:'',textContent:'',hidden:false});return elements.get(s);};
- const sandbox={document:{querySelector:element,querySelectorAll:()=>[]},window:{addEventListener(){}},URLSearchParams,Map,console,
+ const sandbox={document:{querySelector:element,querySelectorAll:()=>[]},window:{addEventListener(){}},URL,URLSearchParams,Map,console,
  setTimeout:()=>1,clearTimeout(){},setInterval(){},queueMicrotask(){},fetch:(path,options)=>new Promise(resolve=>requests.push({path,options,resolve}))};
  vm.createContext(sandbox);
  const code=fs.readFileSync(require('node:path').join(__dirname,'../static/app.js'),'utf8').replace('refresh();setInterval(', 'setInterval(');
@@ -34,4 +34,14 @@ test('a delayed poll cannot undo an optimistic decision',async()=>{
  const f=fixture(),poll=f.run('refresh()'),move=f.run("move('a','kept')");
  f.reply(0,true,f.board);await poll;assert.equal(f.run('board.columns.kept[0].id'),'a');
  f.reply(1,true,{ok:true});await move;assert.equal(f.run('board.columns.kept[0].id'),'a');
+});
+
+test('retained cards expose safe competitor links and an edit button',()=>{
+ const f=fixture();
+ const html=f.run(`card({id:'kept',stage:'kept',raw:'Lampe',analyst:'',competitor_links:['https://example.com/product','javascript:alert(1)']})`);
+ assert.match(html,/Ajouter des concurrents|Modifier les concurrents/);
+ assert.match(html,/href="https:\/\/example.com\/product"/);
+ assert.match(html,/rel="noopener noreferrer"/);
+ assert.doesNotMatch(html,/href="javascript:/);
+ assert.match(html,/data-decision="rejected"/);
 });

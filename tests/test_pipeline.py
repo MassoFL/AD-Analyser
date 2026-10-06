@@ -140,6 +140,28 @@ class PipelineTest(unittest.TestCase):
             self.app.update(row['id'],{'revision':0,'search_keywords':['écrasé']})
         self.assertEqual(self.app.serialize(self.rows()[0])['search_keywords'],['un','deux','trois'])
 
+    def test_competitors_persist_without_changing_analysis_or_keywords(self):
+        self.insert();row=self.rows()[0]
+        self.app.update(row['id'],{'revision':0,'stage':'kept','analysis':analysis(),'search_keywords':['lampe']})
+        self.app.update(row['id'],{'revision':1,'competitor_links':[' https://example.com/produit ','https://example.com/produit','https://example.org']})
+        self.insert()
+        self.app.update(row['id'],{'revision':2,'stage':'rejected'})
+        result=self.app.serialize(self.rows()[0])
+        self.assertEqual(result['competitor_links'],['https://example.com/produit','https://example.org'])
+        self.assertEqual(result['search_keywords'],['lampe'])
+        self.assertEqual(result['analysis']['micro_niche'],'Lampes rechargeables')
+        with self.assertRaises(ValueError):
+            self.app.update(row['id'],{'revision':1,'competitor_links':[]})
+        self.app.update(row['id'],{'revision':3,'competitor_links':[]})
+        self.assertEqual(self.app.serialize(self.rows()[0])['competitor_links'],[])
+
+    def test_competitor_url_validation(self):
+        self.insert();row=self.rows()[0]
+        for bad in ['https://example.com',[None],['javascript:alert(1)'],['file:///tmp/file'],['https://user:password@example.com'],['https://example.com/a b'],['https://example.com:99999'],['https://example.com/'+('a'*2048)],['https://example.com']*21]:
+            with self.assertRaises(ValueError):
+                self.app.update(row['id'],{'revision':0,'competitor_links':bad})
+        self.assertEqual(self.rows()[0]['revision'],0)
+
     def test_board_never_exposes_api_key(self):
         self.assertNotIn('fake-test-key',json.dumps(self.app.board({})))
 

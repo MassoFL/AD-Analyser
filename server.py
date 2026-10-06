@@ -86,6 +86,30 @@ def validate_keywords(value):
             result.append(keyword)
     return result
 
+def validate_competitors(value):
+    if not isinstance(value,list) or len(value)>20:
+        raise ValueError('Vingt liens concurrents maximum par annonce.')
+    result = []
+    for link in value:
+        if not isinstance(link,str):
+            raise ValueError('Chaque lien doit être une adresse web.')
+        link = link.strip()
+        if not link:
+            continue
+        if len(link)>2048 or any(c.isspace() or ord(c)<32 or ord(c)==127 for c in link) or chr(92) in link:
+            raise ValueError('Lien concurrent invalide.')
+        try:
+            parsed = urlparse(link)
+            if parsed.scheme not in ('http','https') or not parsed.hostname or parsed.username or parsed.password:
+                raise ValueError()
+            if parsed.port is not None and not 1<=parsed.port<=65535:
+                raise ValueError()
+        except ValueError:
+            raise ValueError('Utilise une adresse complète commençant par https:// ou http://.') from None
+        if link not in result:
+            result.append(link)
+    return result
+
 def ask_mistral(text, config):
     payload = {'model': config.get('MISTRAL_MODEL', 'mistral-small-latest'), 'temperature': 0.1,
                'max_tokens': 1500, 'response_format': {'type': 'json_object'},
@@ -135,6 +159,8 @@ class App:
             ''')
             if 'search_keywords' not in [r['name'] for r in db.execute('PRAGMA table_info(ads)')]:
                 db.execute("ALTER TABLE ads ADD COLUMN search_keywords TEXT NOT NULL DEFAULT '[]'")
+            if 'competitor_links' not in [r['name'] for r in db.execute('PRAGMA table_info(ads)')]:
+                db.execute("ALTER TABLE ads ADD COLUMN competitor_links TEXT NOT NULL DEFAULT '[]'")
 
     def config(self):
         return self.config_override if self.config_override is not None else env_file()
@@ -269,6 +295,7 @@ class App:
     @staticmethod
     def serialize(row):
         result = dict(row)
+        result['competitor_links'] = json.loads(result.get('competitor_links') or '[]')
         result['search_keywords'] = json.loads(result.get('search_keywords') or '[]')
         result['analysis'] = json.loads(result['analysis']) if result['analysis'] else None
         result['has_image'] = bool(result.pop('image_path'))
@@ -325,6 +352,12 @@ class App:
                     raise ValueError('Le stockage des mots-clés doit être activé dans Supabase (migration 002).')
                 keyword_sql = ',search_keywords=?'
                 values.append(json.dumps(keywords,ensure_ascii=False))
+            if 'competitor_links' in body:
+                links = validate_competitors(body['competitor_links'])
+                if 'competitor_links' not in row.keys():
+                    raise ValueError('Le stockage des concurrents doit être activé dans Supabase (migration 003).')
+                keyword_sql += ',competitor_links=?'
+                values.append(json.dumps(links,ensure_ascii=False))
             values.extend([time.time(),ident,row['revision']])
             result = db.execute('UPDATE ads SET stage=?,analysis=?,analyst=?'+keyword_sql+',revision=revision+1,updated=? WHERE id=? AND revision=?',values)
             if result.rowcount != 1:
@@ -458,11 +491,12 @@ def make_handler(app, port=8765, cloud=False, config=None):
                 if route.path=='/api/export':
                     with self.application.connect() as db: rows=db.execute('SELECT * FROM ads ORDER BY created,id').fetchall()
                     out=io.StringIO(); writer=csv.writer(out,delimiter=';')
-                    writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire','mot_cle_1','mot_cle_2','mot_cle_3'])
+                    writer.writerow(['id','texte_annonce','couverture','texte_nettoye','micro_niche','consommable','service','potentiel E-Commerce','statut','commentaire','mot_cle_1','mot_cle_2','mot_cle_3','liens_concurrents'])
                     for row in rows:
                         a=json.loads(row['analysis'] or '{}')
                         vals=[row['id'],row['raw'],row['reach'],a.get('texte_nettoye',''),a.get('micro_niche',''),a.get('consommable',''),a.get('service',''),a.get('potentiel_ecommerce',''),LABELS[row['stage']],a.get('commentaire','')]
                         keywords=json.loads(dict(row).get('search_keywords') or '[]'); vals+=(keywords+['','',''])[:3]
+                        vals.append('\n'.join(json.loads(dict(row).get('competitor_links') or '[]')))
                         writer.writerow(["'"+v if str(v).lstrip().startswith(('=','+','-','@')) else v for v in vals])
                     return self.send(('\ufeff'+out.getvalue()).encode(),content='text/csv; charset=utf-8',extra={'Content-Disposition':'attachment; filename="pipeline.csv"'})
                 if route.path.startswith('/images/'):

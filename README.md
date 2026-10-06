@@ -79,7 +79,7 @@ automatiquement ses résultats, sans lancer ni planifier de navigateur en arriè
 
 ## Configuration Supabase
 
-1. Dans le SQL Editor du projet, exécuter les fichiers de `supabase/migrations/` dans l’ordre (001, puis 002).
+1. Dans le SQL Editor du projet, exécuter les fichiers de `supabase/migrations/` dans l’ordre (001, 002, puis 003).
    Ce script idempotent crée le schéma privé `ad_pipeline`, les tables et le rôle
    `ad_pipeline_app`. Les tables ne sont pas exposées par la Data API ; RLS est activé,
    sans accès pour `anon` ou `authenticated`.
@@ -164,3 +164,12 @@ Appliquer `supabase/migrations/002_search_keywords.sql` avant d’enregistrer de
 Sans cette migration, le pipeline existant continue de fonctionner avec des listes vides.
 Aucune saisie manuelle ni génération Mistral n’est activée : cette étape prépare seulement
 le stockage, la validation, l’API et l’affichage pour une future génération.
+
+## Liens concurrents
+
+Dans une carte **Retenue**, cliquer sur **Ajouter des concurrents**. Dans la fiche,
+coller une URL complète par ligne (HTTP ou HTTPS, 20 liens maximum) puis enregistrer.
+Effacer une ligne pour supprimer un lien. Les liens s’ouvrent dans un nouvel onglet.
+Ils restent associés à l’annonce après un import, une analyse ou un changement de colonne,
+et sont inclus dans la colonne `liens_concurrents` du CSV. Aucun site concurrent n’est
+consulté automatiquement. Activer le stockage avec `supabase/migrations/003_competitor_links.sql`.
