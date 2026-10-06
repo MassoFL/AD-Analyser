@@ -5,6 +5,8 @@
 
 /* Review mode: one large decision card is the primary workspace. */
 .focus-column{width:100%;max-width:980px;margin:0 auto;min-height:0;background:#eaf0f5}
+.board.review-only{display:flex;justify-content:center;align-items:center;min-height:calc(100vh - 330px)}
+.board.review-only .focus-column{margin:0}
 .focus-column .cards{max-height:none;min-height:0;padding:16px;overflow:visible}
 .focus-column .card{width:100%;cursor:default}
 .focus-column .visual{height:360px;min-height:360px;max-height:360px}
