@@ -43,7 +43,7 @@ class SupabaseTest(test_pipeline.PipelineTest):
         self.assertEqual(self.app.ingest_many(rows,source),0)
         self.assertEqual(self.app.board({'q':['100%']})['counts']['inbox'],1)
         self.assertEqual(self.app.board({'q':['100_']})['counts']['inbox'],0)
-        self.assertEqual(self.app.board({'potential':['oui']})['counts']['inbox'],0)
+        self.assertEqual(self.app.board({'potential':['oui']})['counts']['inbox'],1)
 
     def test_timestamp_precision_survives_remote_round_trip(self):
         value = 1791234567.1234567

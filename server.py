@@ -269,7 +269,7 @@ class App:
             params.append('%'+needle.replace('!','!!').replace('%','!%').replace('_','!_')+'%')
         if potential:
             field = "analysis::jsonb->>'potentiel_ecommerce'" if self.storage.remote else "json_extract(analysis,'$.potentiel_ecommerce')"
-            clauses.append(field+'=?'); params.append(potential)
+            clauses.append("(stage!='review' OR "+field+'=?)'); params.append(potential)
         where = ' WHERE ' + ' AND '.join(clauses) if clauses else ''
         with self.connect() as db:
             totals = {s:0 for s in STAGES}

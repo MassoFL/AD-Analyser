@@ -105,6 +105,21 @@ class PipelineTest(unittest.TestCase):
         self.app.update(old['id'],{'revision':0,'stage':'kept'})
         self.assertEqual(self.app.board({})['columns']['kept'][0]['id'],old['id'])
 
+    def test_potential_filter_only_applies_to_review(self):
+        for text in ('Pending','Review yes','Review no','Kept','Rejected'):
+            self.insert(text)
+        rows={row['raw']:row for row in self.rows()}
+        for text,stage,consumable in [('Review yes','review','non'),('Review no','review','oui'),('Kept','kept','oui'),('Rejected','rejected','non')]:
+            self.app.update(rows[text]['id'],{'revision':0,'stage':stage,'analysis':analysis(consommable=consumable)})
+        for potential,expected in [('oui','Review yes'),('non','Review no')]:
+            board=self.app.board({'potential':[potential]})
+            self.assertEqual(board['counts'],{'inbox':1,'review':1,'kept':1,'rejected':1})
+            self.assertEqual(board['columns']['review'][0]['raw'],expected)
+            self.assertEqual(board['columns']['inbox'][0]['raw'],'Pending')
+            self.assertEqual(len(board['columns']['kept']),1)
+            self.assertEqual(len(board['columns']['rejected']),1)
+            self.assertEqual(board['totals']['review'],2)
+
     def test_board_never_exposes_api_key(self):
         self.assertNotIn('fake-test-key',json.dumps(self.app.board({})))
 
