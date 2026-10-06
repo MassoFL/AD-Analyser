@@ -5,7 +5,8 @@ let board, selected, initialAnalysis, initialCompetitors, limit=25, timer, loadi
 const pendingMoves=new Map();
 let boardVersion=0, refreshAgain=false, moveRefreshTimer;
 let offsets={inbox:0,review:0,kept:0,rejected:0}, cloudJob=null, stopCloud=false;
-const focusStages=['review'];
+const focusStages=['review','kept'];
+let reviewPositioned=false;
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 function toast(message){$('#toast').textContent=message;$('#toast').hidden=false;clearTimeout(timer);timer=setTimeout(()=>$('#toast').hidden=true,6500);}
 async function api(path,body){const response=await fetch(path,body===undefined?{}:{method:'POST',headers:{'Content-Type':'application/json','X-Pipeline-Token':token},body:JSON.stringify(body)});const result=await response.json();if(!response.ok)throw Error(result.error||'Opération impossible.');return result;}
@@ -36,7 +37,8 @@ function renderBoard(){
 const total=Object.values(board.totals).reduce((a,b)=>a+b,0);$('#summary').textContent=`${total.toLocaleString('fr-FR')} annonces · ${board.totals.review} à examiner · ${board.totals.kept} retenues`;
 const scrolls={};document.querySelectorAll('.cards').forEach(el=>scrolls[el.dataset.stage]=el.scrollTop);
 $('#board').className='board review-only';
-$('#board').innerHTML=focusStages.map(key=>{const label=stages[key];return `<section class="column focus-column" data-stage="${key}" aria-label="${label}"><div class="column-head"><span>${label}</span><span class="count">${board.counts[key]}</span></div><div class="cards" data-stage="${key}">${board.columns[key].map(card).join('')||`<div class="empty"><b>Aucune annonce à examiner</b>${esc(descriptions[key])}</div>`}</div><div class="review-navigation"><button data-page="${key}" data-delta="-1" ${offsets[key]===0?'disabled':''}>← Précédente</button><span>${board.counts[key] ? offsets[key]+1 : 0} / ${board.counts[key]}</span><button data-page="${key}" data-delta="1" ${offsets[key]+1>=board.counts[key]?'disabled':''}>Suivante →</button></div></section>`;}).join('');
+$('#board').innerHTML=focusStages.map(key=>{const label=stages[key];return `<section class="column focus-column" data-stage="${key}" aria-label="${label}"><div class="column-head"><span>${label}</span><span class="count">${board.counts[key]}</span></div><div class="cards" data-stage="${key}">${board.columns[key].map(card).join('')||`<div class="empty"><b>Aucune annonce dans cette colonne</b>${esc(descriptions[key])}</div>`}</div><div class="review-navigation"><button data-page="${key}" data-delta="-1" ${offsets[key]===0?'disabled':''}>← Précédente</button><span>${board.counts[key] ? offsets[key]+1 : 0} / ${board.counts[key]}</span><button data-page="${key}" data-delta="1" ${offsets[key]+1>=board.counts[key]?'disabled':''}>Suivante →</button></div></section>`;}).join('');
+if(!reviewPositioned){const review=document.querySelector('.focus-column[data-stage="review"]');if(review){if(review.scrollIntoView)review.scrollIntoView({block:'nearest',inline:'center'});reviewPositioned=true;}}
 document.querySelectorAll('.cards').forEach(el=>el.scrollTop=scrolls[el.dataset.stage]||0);
 $('#notice').hidden=board.settings.has_key&&!board.import.error;$('#notice').textContent=board.import.error||(board.settings.cloud?'Ajoute MISTRAL_API_KEY dans les variables Vercel puis redéploie.':'Ajoute ta clé Mistral dans Réglages pour analyser les prochaines annonces. Les 100 premières analyses ont été reprises si elles étaient disponibles.');
 $('#analyze').disabled=board.job.running;$('#stop').hidden=!board.job.running;$('#batch').disabled=board.job.running;

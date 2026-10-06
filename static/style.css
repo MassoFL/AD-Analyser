@@ -5,8 +5,8 @@
 
 /* Review mode: one large decision card is the primary workspace. */
 .focus-column{width:100%;max-width:980px;margin:0 auto;min-height:0;background:#eaf0f5}
-.board.review-only{display:flex;justify-content:center;align-items:center;min-height:calc(100vh - 330px)}
-.board.review-only .focus-column{margin:0}
+.board.review-only{display:flex;justify-content:flex-start;align-items:center;gap:28px;min-height:calc(100vh - 330px);overflow-x:auto;overflow-y:hidden;scroll-behavior:smooth;padding:0 max(0px, calc((100vw - 980px) / 2));scrollbar-width:thin}
+.board.review-only .focus-column{margin:0;flex:0 0 min(980px, calc(100vw - 72px));}
 .focus-column .cards{max-height:none;min-height:0;padding:16px;overflow:visible}
 .focus-column .card{width:100%;cursor:default}
 .focus-column .visual{height:360px;min-height:360px;max-height:360px}
