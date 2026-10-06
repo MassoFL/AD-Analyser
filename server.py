@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """Pipeline local : Python 3.9+, Supabase/PostgreSQL ou SQLite."""
 import argparse
-import base64
 import hmac
 import csv
 from contextlib import nullcontext
@@ -50,7 +49,7 @@ def env_file():
             if '=' in line and not line.lstrip().startswith('#'):
                 k, v = line.split('=', 1)
                 data[k.strip()] = v.strip().strip('"').strip("'")
-    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV', 'SUPABASE_DB_URL', 'SUPABASE_SSLROOTCERT', 'PIPELINE_USER', 'PIPELINE_PASSWORD', 'VERCEL'):
+    for k in ('MISTRAL_API_KEY', 'MISTRAL_MODEL', 'PORT', 'SCRAPER_EXPORT_DIR', 'SEED_CSV', 'SUPABASE_DB_URL', 'SUPABASE_SSLROOTCERT', 'VERCEL'):
         if k in os.environ:
             data[k] = os.environ[k]
     return data
@@ -402,8 +401,8 @@ class App:
 
 def make_handler(app, port=8765, cloud=False, config=None):
     config = config or {}
-    password = config.get('PIPELINE_PASSWORD','')
-    token = hmac.new(password.encode(), b'ad-pipeline-csrf-v1', 'sha256').hexdigest() if cloud else secrets.token_urlsafe(32)
+    csrf_key = config.get('SUPABASE_DB_URL','')
+    token = hmac.new(csrf_key.encode(), b'ad-pipeline-csrf-v1', 'sha256').hexdigest() if cloud else secrets.token_urlsafe(32)
     class Handler(BaseHTTPRequestHandler):
         application = app
         def log_message(self,*args): pass
@@ -420,24 +419,7 @@ def make_handler(app, port=8765, cloud=False, config=None):
         def allowed(self):
             if cloud: return True
             return self.headers.get('Host') in (f'127.0.0.1:{port}',f'localhost:{port}')
-        def authenticated(self):
-            if not cloud:
-                return True
-            if len(password) < 24:
-                self.send({'error':'Configurer PIPELINE_PASSWORD (24 caractères minimum) dans Vercel.'},503)
-                return False
-            try:
-                scheme, encoded = self.headers.get('Authorization','').split(' ',1)
-                if scheme.lower()!='basic' or len(encoded)>4096: raise ValueError()
-                decoded = base64.b64decode(encoded,validate=True)
-                expected = (config.get('PIPELINE_USER','admin')+':'+password).encode()
-                if hmac.compare_digest(decoded,expected): return True
-            except (ValueError,TypeError):
-                pass
-            self.send({'error':'Connexion requise.'},401,extra={'WWW-Authenticate':'Basic realm="Ad Pipeline", charset="UTF-8"'})
-            return False
         def do_GET(self):
-            if not self.authenticated(): return
             if not self.allowed(): return self.send({'error':'Hôte refusé'},403)
             route = urlparse(self.path)
             try:
@@ -473,7 +455,6 @@ def make_handler(app, port=8765, cloud=False, config=None):
             except Exception:
                 self.send({'error':'Impossible de charger les données.'},500)
         def do_POST(self):
-            if not self.authenticated(): return
             if not self.allowed() or self.headers.get('X-Pipeline-Token')!=token:
                 return self.send({'error':'Requête refusée. Recharge la page.'},403)
             try:

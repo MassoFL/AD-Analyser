@@ -123,14 +123,14 @@ Dans **Settings → Environment Variables**, renseigner côté serveur :
 | `SUPABASE_DB_URL` | L’URL privée du compte `ad_pipeline_app` ; utiliser le Transaction pooler, port **6543**, sur Vercel. |
 | `MISTRAL_API_KEY` | La clé Mistral. |
 | `MISTRAL_MODEL` | `mistral-small-latest` (facultatif). |
-| `PIPELINE_USER` | `admin` ou ton identifiant. |
-| `PIPELINE_PASSWORD` | Un mot de passe aléatoire d’au moins 24 caractères. |
 
 Ne pas définir de variable `NEXT_PUBLIC_*` pour ces secrets. Le certificat public
 Supabase est inclus dans `certs/`, donc **ne pas copier le chemin local
 `SUPABASE_SSLROOTCERT` dans Vercel**. Redéployer après une modification des variables.
-L’application refuse tout accès si le mot de passe est absent ou trop court.
-Le navigateur demande l’identifiant et le mot de passe à l’ouverture du site.
+Le site s’ouvre sans identifiant ni mot de passe. Toute personne ayant son URL peut
+consulter les annonces, les modifier, exporter les données et lancer des appels Mistral
+facturés au compte configuré. Les anciennes variables PIPELINE_USER et PIPELINE_PASSWORD
+ne sont plus utilisées et peuvent être retirées de Vercel.
 
 Le scraper reste sur le Mac. Lancer `Synchroniser.command` en plus du scraper pour
 alimenter Supabase (ou garder l’interface locale ouverte : elle réalise déjà cet import).

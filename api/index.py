@@ -11,7 +11,7 @@ if not config.get('SUPABASE_SSLROOTCERT'):
     config['SUPABASE_SSLROOTCERT'] = 'certs/supabase-ca.crt'
 
 class RequestApp:
-    """Connect only after HTTP authentication, then release all DB resources."""
+    """Connect on demand, then release all DB resources."""
     def __init__(self): self.instance = None
     def __getattr__(self, name):
         if self.instance is None: self.instance = CloudApp(config=config)

@@ -32,7 +32,7 @@ $('#notice').hidden=board.settings.has_key&&!board.import.error;$('#notice').tex
 $('#analyze').disabled=board.job.running;$('#stop').hidden=!board.job.running;$('#batch').disabled=board.job.running;
 $('#job').hidden=!(board.job.running||board.job.total);$('#job').textContent=`${board.job.running?'Analyse en cours':'Dernier lot'} : ${board.job.done}/${board.job.total} analysées${board.job.skipped?' · '+board.job.skipped+' ignorée(s)':''}${board.job.failed?' · '+board.job.failed+' échec(s)':''}${board.job.error?' — '+board.job.error:''}`;
 $('#sync-text').textContent=(board.settings.database||'SQLite')+' · '+(board.import.last?'Synchronisé à '+new Date(board.import.last*1000).toLocaleTimeString('fr-FR',{hour:'2-digit',minute:'2-digit'})+' · auto 10 s':'Import en cours…');
-if(board.settings.cloud){$('.local').textContent='Espace privé';$('#sync-text').textContent='Supabase · collecte depuis ton Mac';}
+if(board.settings.cloud){$('.local').textContent='Pipeline en ligne';$('#sync-text').textContent='Supabase · collecte depuis ton Mac';}
 }
 
 function openSettings(){ if(board?.settings.cloud){toast('Réglages dans Vercel → Settings → Environment Variables : MISTRAL_API_KEY et MISTRAL_MODEL.');return;} $('#api-key').value='';$('#model').value=board?.settings.model||'mistral-small-latest';$('#key-status').textContent=board?.settings.has_key?'Une clé est enregistrée. Laisse le champ vide pour la conserver.':'Aucune clé enregistrée.';$('#settings').showModal();}

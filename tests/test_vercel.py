@@ -1,4 +1,3 @@
-import base64
 import http.client
 import json
 import re
@@ -18,11 +17,9 @@ class VercelTest(unittest.TestCase):
         self.tmp=tempfile.TemporaryDirectory()
         self.app=App(Path(self.tmp.name),{'MISTRAL_API_KEY':'test-key'})
         self.app.__class__=CloudApp  # SQLite fixture; no external data changed.
-        self.password='test-password-for-http-fixture-only'
-        self.config={'PIPELINE_PASSWORD':self.password}
+        self.config={'SUPABASE_DB_URL':'postgresql://fixture-secret'}
         self.server=ThreadingHTTPServer(('127.0.0.1',0),make_handler(self.app,cloud=True,config=self.config))
         self.thread=threading.Thread(target=self.server.serve_forever,daemon=True);self.thread.start()
-        self.auth='Basic '+base64.b64encode(('admin:'+self.password).encode()).decode()
 
     def tearDown(self):
         self.server.shutdown();self.server.server_close();self.thread.join();self.tmp.cleanup()
@@ -32,26 +29,21 @@ class VercelTest(unittest.TestCase):
         connection.request('GET' if body is None else 'POST',path,None if body is None else json.dumps(body),headers or {})
         response=connection.getresponse();result=response.status,response.read();connection.close();return result
 
-    def test_all_routes_require_authentication(self):
-        for path in ('/','/app.js','/api/board','/api/export-page','/api/ad/test','/images/test'):
-            self.assertEqual(self.request(path)[0],401)
-        self.assertEqual(self.request('/api/analyze',{})[0],401)
-        self.assertEqual(self.request(headers={'Authorization':'Basic invalid'})[0],401)
-
-    def test_authenticated_ui_and_csrf(self):
-        status,html=self.request(headers={'Authorization':self.auth})
+    def test_site_opens_without_credentials_and_keeps_csrf(self):
+        status,html=self.request()
         self.assertEqual(status,200)
         token=re.search(b'name="pipeline-token" content="([^"]+)"',html).group(1).decode()
-        self.assertNotIn(self.password.encode(),html)
-        self.assertEqual(self.request('/app.js',headers={'Authorization':self.auth})[0],200)
-        self.assertEqual(self.request('/api/sync',{}, {'Authorization':self.auth})[0],403)
-        self.assertEqual(self.request('/api/sync',{}, {'Authorization':self.auth,'X-Pipeline-Token':token})[0],200)
-        self.assertEqual(self.request('/.env',headers={'Authorization':self.auth})[0],404)
+        self.assertNotIn(b'fixture-secret',html)
+        self.assertEqual(self.request('/app.js')[0],200)
+        self.assertEqual(self.request('/api/board')[0],200)
+        self.assertEqual(self.request('/api/sync',{})[0],403)
+        self.assertEqual(self.request('/api/sync',{}, {'X-Pipeline-Token':token})[0],200)
+        self.assertEqual(self.request('/.env')[0],404)
 
-    def test_unconfigured_password_fails_closed(self):
-        handler=make_handler(self.app,cloud=True,config={})
+    def test_legacy_password_configuration_does_not_prompt(self):
+        handler=make_handler(self.app,cloud=True,config={'PIPELINE_PASSWORD':'legacy'})
         with patch.object(self.server,'RequestHandlerClass',handler):
-            self.assertEqual(self.request(headers={'Authorization':self.auth})[0],503)
+            self.assertEqual(self.request()[0],200)
 
     def test_no_file_settings_or_missing_database_fallback(self):
         with self.assertRaises(ValueError):self.app.save_settings({'key':'should-not-write'})
